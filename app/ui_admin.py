@@ -1,6 +1,8 @@
 # app/ui_admin.py
 import tkinter as tk
 from tkinter import ttk, messagebox
+from datetime import datetime
+from typing import Optional
 
 from .ui_common import HeaderFrame
 from .ui_action_center import ActionCenterUI
@@ -13,6 +15,9 @@ from .db import (
     list_screen_permissions,
     set_screen_permission,
     delete_screen_permission,
+    list_lines,
+    get_production_goal,
+    fetch_tool_entries,
 )
 from .permissions import ROLE_SCREEN_DEFAULTS
 from .screen_registry import SCREEN_REGISTRY
@@ -52,11 +57,13 @@ class AdminUI(tk.Frame):
         tab_users = tk.Frame(nb, bg=controller.colors["bg"])
         tab_actions = tk.Frame(nb, bg=controller.colors["bg"])
         tab_access = tk.Frame(nb, bg=controller.colors["bg"])
+        tab_shift_reports = tk.Frame(nb, bg=controller.colors["bg"])
         tab_audit = tk.Frame(nb, bg=controller.colors["bg"])
 
         nb.add(tab_users, text="User Management")
         nb.add(tab_actions, text="Action Center")
         nb.add(tab_access, text="Screen Access")
+        nb.add(tab_shift_reports, text="Shift Reports")
         nb.add(tab_audit, text="Audit Trail")
 
         self._build_user_management(tab_users)
@@ -66,6 +73,7 @@ class AdminUI(tk.Frame):
         except TypeError:
             ActionCenterUI(tab_actions, controller).pack(fill="both", expand=True)
         self._build_access_management(tab_access)
+        self._build_shift_reports(tab_shift_reports)
         try:
             AuditTrailUI(tab_audit, controller, show_header=False).pack(fill="both", expand=True)
         except TypeError:
@@ -426,3 +434,243 @@ class AdminUI(tk.Frame):
         delete_screen_permission(username, screen)
         log_audit(self.controller.user, f"Removed access {screen} for {username}")
         self.refresh_access()
+
+    # -------------------------
+    def _build_shift_reports(self, parent):
+        header = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=10)
+        header.pack(fill="x")
+
+        tk.Label(
+            header,
+            text="Shift Production Reports",
+            bg=self.controller.colors["bg"],
+            fg=self.controller.colors["fg"],
+            font=("Arial", 16, "bold"),
+        ).pack(side="left")
+
+        tk.Button(header, text="Refresh", command=self.refresh_shift_reports).pack(side="right")
+
+        filters = tk.LabelFrame(
+            parent,
+            text="Filters",
+            padx=10,
+            pady=10,
+            bg=self.controller.colors["bg"],
+            fg=self.controller.colors["fg"],
+        )
+        filters.pack(fill="x", padx=10, pady=(0, 10))
+
+        self.shift_line_var = tk.StringVar(value="All")
+        self.shift_var = tk.StringVar(value="All")
+        self.shift_operator_var = tk.StringVar(value="All")
+        self.shift_start_var = tk.StringVar(value="")
+        self.shift_end_var = tk.StringVar(value="")
+        self.shift_sort_var = tk.StringVar(value="Time")
+
+        row1 = tk.Frame(filters, bg=self.controller.colors["bg"])
+        row1.pack(fill="x", pady=4)
+        tk.Label(row1, text="Line:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        self.shift_line_combo = ttk.Combobox(
+            row1,
+            values=["All"] + (list_lines() or []),
+            textvariable=self.shift_line_var,
+            state="readonly",
+            width=16,
+        )
+        self.shift_line_combo.pack(side="left", padx=6)
+
+        tk.Label(row1, text="Shift:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        ttk.Combobox(
+            row1,
+            values=["All", "1st", "2nd", "3rd"],
+            textvariable=self.shift_var,
+            state="readonly",
+            width=10,
+        ).pack(side="left", padx=6)
+
+        tk.Label(row1, text="Operator:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        self.shift_operator_combo = ttk.Combobox(
+            row1,
+            values=["All"],
+            textvariable=self.shift_operator_var,
+            state="readonly",
+            width=18,
+        )
+        self.shift_operator_combo.pack(side="left", padx=6)
+
+        row2 = tk.Frame(filters, bg=self.controller.colors["bg"])
+        row2.pack(fill="x", pady=4)
+        tk.Label(row2, text="Start Date (YYYY-MM-DD):", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        tk.Entry(row2, textvariable=self.shift_start_var, width=12).pack(side="left", padx=6)
+        tk.Label(row2, text="End Date (YYYY-MM-DD):", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        tk.Entry(row2, textvariable=self.shift_end_var, width=12).pack(side="left", padx=6)
+
+        tk.Label(row2, text="Sort By:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        ttk.Combobox(
+            row2,
+            values=["Time", "Line", "Shift", "Operator"],
+            textvariable=self.shift_sort_var,
+            state="readonly",
+            width=12,
+        ).pack(side="left", padx=6)
+
+        tk.Button(row2, text="Apply Filters", command=self.refresh_shift_reports).pack(side="right")
+
+        cols = (
+            "ID",
+            "Date",
+            "Time",
+            "Line",
+            "Shift",
+            "Operator",
+            "Production_Qty",
+            "Downtime_Mins",
+            "Target",
+            "Pct_Goal",
+            "Pct_Goal_Adj",
+        )
+        self.shift_tree = ttk.Treeview(parent, columns=cols, show="headings", height=12)
+        for c in cols:
+            self.shift_tree.heading(c, text=c)
+            if c in {"ID", "Operator"}:
+                self.shift_tree.column(c, width=140)
+            elif c in {"Production_Qty", "Downtime_Mins", "Target"}:
+                self.shift_tree.column(c, width=120)
+            elif c.startswith("Pct"):
+                self.shift_tree.column(c, width=110)
+            else:
+                self.shift_tree.column(c, width=100)
+        self.shift_tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        tk.Button(parent, text="Review Selected", command=self.review_shift_report).pack(
+            anchor="e", padx=16, pady=(0, 10)
+        )
+
+        self.refresh_shift_reports()
+
+    def _parse_date(self, value: str) -> Optional[datetime]:
+        value = (value or "").strip()
+        if not value:
+            return None
+        return datetime.strptime(value, "%Y-%m-%d")
+
+    def refresh_shift_reports(self):
+        for i in self.shift_tree.get_children():
+            self.shift_tree.delete(i)
+
+        entries = fetch_tool_entries()
+        shift_entries = [e for e in entries if str(e.get("reason", "")).strip() == "Shift Production"]
+
+        operators = sorted({e.get("tool_changer", "") for e in shift_entries if e.get("tool_changer")})
+        self.shift_operator_combo.configure(values=["All"] + operators)
+
+        try:
+            start = self._parse_date(self.shift_start_var.get())
+            end = self._parse_date(self.shift_end_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid Date", "Use YYYY-MM-DD format for dates.")
+            return
+
+        line_filter = self.shift_line_var.get()
+        shift_filter = self.shift_var.get()
+        operator_filter = self.shift_operator_var.get()
+
+        filtered = []
+        for entry in shift_entries:
+            entry_date = entry.get("date", "")
+            entry_time = entry.get("time", "00:00:00")
+            try:
+                entry_dt = datetime.strptime(f"{entry_date} {entry_time}", "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                entry_dt = None
+
+            if line_filter != "All" and entry.get("line") != line_filter:
+                continue
+            if shift_filter != "All" and entry.get("shift") != shift_filter:
+                continue
+            if operator_filter != "All" and entry.get("tool_changer") != operator_filter:
+                continue
+            if start and entry_dt and entry_dt.date() < start.date():
+                continue
+            if end and entry_dt and entry_dt.date() > end.date():
+                continue
+            filtered.append((entry, entry_dt))
+
+        sort_key = self.shift_sort_var.get()
+        if sort_key == "Line":
+            filtered.sort(key=lambda x: (x[0].get("line", ""), x[1] or datetime.min))
+        elif sort_key == "Shift":
+            filtered.sort(key=lambda x: (x[0].get("shift", ""), x[1] or datetime.min))
+        elif sort_key == "Operator":
+            filtered.sort(key=lambda x: (x[0].get("tool_changer", ""), x[1] or datetime.min))
+        else:
+            filtered.sort(key=lambda x: x[1] or datetime.min, reverse=True)
+
+        self.shift_report_cache = {}
+        for entry, entry_dt in filtered:
+            line = entry.get("line", "")
+            target = get_production_goal(line)
+            production_qty = float(entry.get("production_qty", 0.0) or 0.0)
+            downtime = float(entry.get("downtime_mins", 0.0) or 0.0)
+
+            pct_goal = (production_qty / target * 100.0) if target > 0 else 0.0
+            shift_minutes = 480.0
+            adjusted_target = target * max(0.0, 1.0 - (downtime / shift_minutes)) if target > 0 else 0.0
+            pct_goal_adj = (production_qty / adjusted_target * 100.0) if adjusted_target > 0 else 0.0
+
+            row = (
+                entry.get("id", ""),
+                entry.get("date", ""),
+                entry.get("time", ""),
+                line,
+                entry.get("shift", ""),
+                entry.get("tool_changer", ""),
+                f"{production_qty:.0f}",
+                f"{downtime:.1f}",
+                f"{target:.0f}",
+                f"{pct_goal:.1f}%",
+                f"{pct_goal_adj:.1f}%",
+            )
+            self.shift_tree.insert("", "end", values=row)
+            self.shift_report_cache[str(entry.get("id", ""))] = {
+                "entry": entry,
+                "target": target,
+                "pct_goal": pct_goal,
+                "pct_goal_adj": pct_goal_adj,
+            }
+
+    def review_shift_report(self):
+        sel = self.shift_tree.selection()
+        if not sel:
+            messagebox.showwarning("Select", "Select a shift report to review.")
+            return
+        report_id = self.shift_tree.item(sel[0], "values")[0]
+        data = self.shift_report_cache.get(str(report_id))
+        if not data:
+            messagebox.showerror("Not Found", "Unable to locate shift report details.")
+            return
+
+        entry = data["entry"]
+        top = tk.Toplevel(self)
+        top.title("Shift Report Review")
+        top.geometry("420x360")
+
+        info = [
+            ("ID", entry.get("id", "")),
+            ("Date", entry.get("date", "")),
+            ("Time", entry.get("time", "")),
+            ("Line", entry.get("line", "")),
+            ("Shift", entry.get("shift", "")),
+            ("Operator", entry.get("tool_changer", "")),
+            ("Production Qty", f"{float(entry.get('production_qty', 0.0) or 0.0):.0f}"),
+            ("Downtime (min)", f"{float(entry.get('downtime_mins', 0.0) or 0.0):.1f}"),
+            ("Target", f"{data['target']:.0f}"),
+            ("% of Goal", f"{data['pct_goal']:.1f}%"),
+            ("% of Goal (Adj)", f"{data['pct_goal_adj']:.1f}%"),
+        ]
+
+        frame = tk.Frame(top, padx=12, pady=12)
+        frame.pack(fill="both", expand=True)
+        for idx, (label, value) in enumerate(info):
+            tk.Label(frame, text=f"{label}:", anchor="w", width=18).grid(row=idx, column=0, sticky="w", pady=4)
+            tk.Label(frame, text=value, anchor="w").grid(row=idx, column=1, sticky="w", pady=4)
