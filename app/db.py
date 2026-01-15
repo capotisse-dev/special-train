@@ -82,6 +82,22 @@ def init_db() -> None:
         FOREIGN KEY(cell_id) REFERENCES cells(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS cells (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        line_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        UNIQUE(line_id, name),
+        FOREIGN KEY(line_id) REFERENCES lines(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS machines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cell_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        UNIQUE(cell_id, name),
+        FOREIGN KEY(cell_id) REFERENCES cells(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS tools (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tool_num TEXT NOT NULL UNIQUE,

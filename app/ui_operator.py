@@ -128,6 +128,38 @@ class OperatorUI(tk.Frame):
         self.dt_comment_entry = tk.Entry(self.downtime_frame, width=28)
         self.dt_comment_entry.grid(row=0, column=5, padx=(6, 0))
 
+        tk.Button(
+            self.downtime_frame,
+            text="Add Downtime",
+            command=self.add_downtime_entry,
+            bg="#17a2b8",
+            fg="white",
+        ).grid(row=0, column=6, padx=(12, 0))
+
+        tk.Button(
+            self.downtime_frame,
+            text="Remove Selected",
+            command=self.remove_downtime_entry,
+            bg="#dc3545",
+            fg="white",
+        ).grid(row=0, column=7, padx=(8, 0))
+
+        self.downtime_tree = ttk.Treeview(
+            body,
+            columns=("code", "minutes", "occurrences", "comments"),
+            show="headings",
+            height=6,
+        )
+        for col, width in (
+            ("code", 160),
+            ("minutes", 100),
+            ("occurrences", 110),
+            ("comments", 240),
+        ):
+            self.downtime_tree.heading(col, text=col.upper())
+            self.downtime_tree.column(col, width=width)
+        self.downtime_tree.grid(row=5, column=0, columnspan=4, sticky="we", pady=(6, 10))
+
         self._toggle_downtime_fields()
         self._refresh_line_dependent_fields()
 
