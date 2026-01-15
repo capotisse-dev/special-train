@@ -7,15 +7,7 @@ from datetime import datetime
 
 from .ui_common import HeaderFrame
 from .storage import safe_int, safe_float
-from .db import (
-    list_downtime_codes,
-    list_lines,
-    list_parts_for_line,
-    list_parts_with_lines,
-    list_cells_for_line,
-    list_machines_for_cell,
-    upsert_tool_entry,
-)
+from .db import list_downtime_codes, list_lines, upsert_operator_entry, upsert_tool_entry
 from .audit import log_audit
 
 
@@ -29,10 +21,22 @@ class OperatorUI(tk.Frame):
         if show_header:
             HeaderFrame(self, controller).pack(fill="x")
 
-        body = tk.Frame(self, bg=self.controller.colors["bg"], padx=20, pady=20)
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=10, pady=10)
+
+        tab_operator = tk.Frame(nb, bg=controller.colors["bg"])
+        tab_shift = tk.Frame(nb, bg=controller.colors["bg"])
+        nb.add(tab_operator, text="Operator Entry")
+        nb.add(tab_shift, text="Shift Production")
+
+        self._build_operator_entry(tab_operator)
+        self._build_shift_production(tab_shift)
+
+    def _build_operator_entry(self, parent):
+        body = tk.Frame(parent, bg=self.controller.colors["bg"], padx=20, pady=20)
         body.pack(fill="both", expand=True)
 
-        self._build_shift_production(body)
+        style = {"bg": self.controller.colors["bg"], "fg": self.controller.colors["fg"]}
 
     def _toggle_downtime_fields(self, event=None):
         enabled = bool(self.downtime_var.get())
@@ -53,10 +57,10 @@ class OperatorUI(tk.Frame):
         line_options = list_lines()
         if not line_options:
             line_options = ["U725", "JL"]
-        self.shift_line_var = tk.StringVar(value=self.controller.user_line or line_options[0])
-        self.shift_line_cb = ttk.Combobox(body, values=line_options, state="readonly", width=18)
-        if self.shift_line_var.get() in line_options:
-            self.shift_line_cb.set(self.shift_line_var.get())
+        self.line_var = tk.StringVar(value=self.controller.user_line or "Both")
+        self.line_cb = ttk.Combobox(body, values=line_options, state="readonly", width=18)
+        if self.line_var.get() in line_options:
+            self.line_cb.set(self.line_var.get())
         else:
             self.shift_line_cb.current(0)
         self.shift_line_cb.grid(row=1, column=1, sticky="w")
@@ -137,16 +141,60 @@ class OperatorUI(tk.Frame):
             width=20,
         ).grid(row=6, column=0, columnspan=4, pady=20, sticky="w")
 
-    def _refresh_line_dependent_fields(self, event=None):
-        line = self.shift_line_cb.get().strip()
-        parts = list_parts_for_line(line)
-        if not parts:
-            parts = [p.get("part_number", "") for p in list_parts_with_lines()]
-        self.part_cb.configure(values=parts)
-        if parts:
-            self.part_cb.set(parts[0])
+    def _build_shift_production(self, parent):
+        body = tk.Frame(parent, bg=self.controller.colors["bg"], padx=20, pady=20)
+        body.pack(fill="both", expand=True)
+
+        style = {"bg": self.controller.colors["bg"], "fg": self.controller.colors["fg"]}
+
+        tk.Label(body, text="Shift Production", font=("Arial", 16, "bold"), **style).grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 15)
+        )
+
+        tk.Label(body, text="Line:", **style).grid(row=1, column=0, sticky="e", pady=6)
+        line_options = list_lines()
+        if not line_options:
+            line_options = ["U725", "JL"]
+        self.shift_line_var = tk.StringVar(value=self.controller.user_line or line_options[0])
+        self.shift_line_cb = ttk.Combobox(body, values=line_options, state="readonly", width=18)
+        if self.shift_line_var.get() in line_options:
+            self.shift_line_cb.set(self.shift_line_var.get())
         else:
-            self.part_cb.set("")
+            self.shift_line_cb.current(0)
+        self.shift_line_cb.grid(row=1, column=1, sticky="w")
+
+        tk.Label(body, text="Shift:", **style).grid(row=2, column=0, sticky="e", pady=6)
+        self.shift_var = tk.StringVar(value="1st")
+        self.shift_cb = ttk.Combobox(body, values=["1st", "2nd", "3rd"], state="readonly", width=18)
+        self.shift_cb.set(self.shift_var.get())
+        self.shift_cb.grid(row=2, column=1, sticky="w")
+
+        tk.Label(body, text="Production Qty:", **style).grid(row=3, column=0, sticky="e", pady=6)
+        self.shift_qty_entry = tk.Entry(body, width=18)
+        self.shift_qty_entry.grid(row=3, column=1, sticky="w")
+
+        tk.Label(body, text="Downtime (min):", **style).grid(row=4, column=0, sticky="e", pady=6)
+        self.shift_downtime_entry = tk.Entry(body, width=18)
+        self.shift_downtime_entry.insert(0, "0")
+        self.shift_downtime_entry.grid(row=4, column=1, sticky="w")
+
+        tk.Button(
+            body,
+            text="Submit Shift Report",
+            command=self.submit_shift_report,
+            bg="#28a745",
+            fg="white",
+            font=("Arial", 12, "bold"),
+            width=20,
+        ).grid(row=6, column=0, columnspan=3, pady=20, sticky="w")
+
+    def _toggle_downtime_fields(self, event=None):
+        enabled = bool(self.downtime_var.get())
+        state = "normal" if enabled else "disabled"
+        for entry in (self.dt_total_entry, self.dt_occ_entry, self.dt_comment_entry):
+            entry.configure(state=state)
+            if not enabled:
+                entry.delete(0, "end")
 
         cells = list_cells_for_line(line)
         self.cell_cb.configure(values=cells)
@@ -230,3 +278,46 @@ class OperatorUI(tk.Frame):
         self.shift_qty_entry.delete(0, "end")
         self.downtime_var.set("")
         self._toggle_downtime_fields()
+
+    def submit_shift_report(self):
+        qty = safe_int(self.shift_qty_entry.get(), 0)
+        if qty <= 0:
+            messagebox.showerror("Missing Info", "Enter the production quantity.")
+            return
+        downtime = safe_float(self.shift_downtime_entry.get(), 0.0)
+        now = datetime.now()
+        entry_id = f"SP-{now.strftime('%Y%m%d-%H%M%S')}"
+        new_row = {
+            "ID": entry_id,
+            "Date": now.strftime("%Y-%m-%d"),
+            "Time": now.strftime("%H:%M:%S"),
+            "Shift": self.shift_cb.get(),
+            "Line": self.shift_line_cb.get(),
+            "Machine": "",
+            "Part_Number": "",
+            "Tool_Num": "",
+            "Reason": "Shift Production",
+            "Downtime_Mins": downtime,
+            "Production_Qty": float(qty),
+            "Cost": 0.0,
+            "Tool_Life": 0.0,
+            "Tool_Changer": self.controller.user or "",
+            "Defects_Present": "No",
+            "Defect_Qty": 0,
+            "Sort_Done": "No",
+            "Defect_Reason": "",
+            "Quality_Verified": "N/A",
+            "Quality_User": "",
+            "Quality_Time": "",
+            "Leader_Sign": "Pending",
+            "Leader_User": "",
+            "Leader_Time": "",
+            "Serial_Numbers": "",
+        }
+        upsert_tool_entry(new_row)
+        log_audit(self.controller.user, f"Shift production entry {entry_id} saved")
+
+        messagebox.showinfo("Saved", "Shift production report submitted for leader signoff.")
+        self.shift_qty_entry.delete(0, "end")
+        self.shift_downtime_entry.delete(0, "end")
+        self.shift_downtime_entry.insert(0, "0")
