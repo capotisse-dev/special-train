@@ -82,6 +82,22 @@ def init_db() -> None:
         FOREIGN KEY(cell_id) REFERENCES cells(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS cells (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        line_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        UNIQUE(line_id, name),
+        FOREIGN KEY(line_id) REFERENCES lines(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS machines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cell_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        UNIQUE(cell_id, name),
+        FOREIGN KEY(cell_id) REFERENCES cells(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS tools (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tool_num TEXT NOT NULL UNIQUE,
@@ -156,9 +172,6 @@ def init_db() -> None:
         tool_num TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
         downtime_mins REAL NOT NULL DEFAULT 0.0,
-        downtime_code TEXT NOT NULL DEFAULT '',
-        downtime_occurrences INTEGER NOT NULL DEFAULT 0,
-        downtime_comments TEXT NOT NULL DEFAULT '',
         production_qty REAL NOT NULL DEFAULT 0.0,
         cost REAL NOT NULL DEFAULT 0.0,
         tool_life REAL NOT NULL DEFAULT 0.0,
@@ -188,22 +201,9 @@ def init_db() -> None:
 
     CREATE TABLE IF NOT EXISTS production_goals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        line TEXT NOT NULL,
-        cell TEXT NOT NULL DEFAULT '',
-        part_number TEXT NOT NULL DEFAULT '',
+        line TEXT NOT NULL UNIQUE,
         target REAL NOT NULL DEFAULT 0.0,
-        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(line, cell, part_number)
-    );
-
-    CREATE TABLE IF NOT EXISTS shift_downtime_entries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        entry_id TEXT NOT NULL,
-        code TEXT NOT NULL DEFAULT '',
-        downtime_mins REAL NOT NULL DEFAULT 0.0,
-        occurrences INTEGER NOT NULL DEFAULT 0,
-        comments TEXT NOT NULL DEFAULT '',
-        FOREIGN KEY(entry_id) REFERENCES tool_entries(id) ON DELETE CASCADE
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS actions (
@@ -276,18 +276,7 @@ def init_db() -> None:
         _ensure_columns(conn, "tool_entries", {
             "tool_life": "REAL NOT NULL DEFAULT 0.0",
             "production_qty": "REAL NOT NULL DEFAULT 0.0",
-            "cell": "TEXT NOT NULL DEFAULT ''",
-            "downtime_code": "TEXT NOT NULL DEFAULT ''",
-            "downtime_occurrences": "INTEGER NOT NULL DEFAULT 0",
-            "downtime_comments": "TEXT NOT NULL DEFAULT ''",
         })
-        _migrate_production_goals(conn)
-        conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_production_goals_line_cell_part
-            ON production_goals(line, cell, part_number)
-            """
-        )
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str]) -> None:
@@ -295,31 +284,6 @@ def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str
     for name, col_def in columns.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {col_def}")
-
-
-def _migrate_production_goals(conn: sqlite3.Connection) -> None:
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(production_goals)").fetchall()}
-    if not columns:
-        return
-    if "cell" in columns and "part_number" in columns:
-        return
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS production_goals_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            line TEXT NOT NULL,
-            cell TEXT NOT NULL DEFAULT '',
-            part_number TEXT NOT NULL DEFAULT '',
-            target REAL NOT NULL DEFAULT 0.0,
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(line, cell, part_number)
-        );
-        INSERT INTO production_goals_new(line, cell, part_number, target, updated_at)
-        SELECT line, '', '', target, updated_at FROM production_goals;
-        DROP TABLE production_goals;
-        ALTER TABLE production_goals_new RENAME TO production_goals;
-        """
-    )
 
 
 def log_audit(username: str, action: str) -> None:
@@ -385,206 +349,37 @@ def list_lines() -> List[str]:
         return [r["name"] for r in rows]
 
 
-def list_parts_for_line(line: str) -> List[str]:
-    line = (line or "").strip()
-    if not line:
-        return []
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT p.part_number
-            FROM parts p
-            JOIN part_lines pl ON pl.part_id = p.id
-            JOIN lines l ON l.id = pl.line_id
-            WHERE p.is_active=1 AND l.name=?
-            ORDER BY p.part_number
-            """,
-            (line,),
-        ).fetchall()
-        return [r["part_number"] for r in rows]
-
-
-def list_cells_for_line(line: str) -> List[str]:
-    line = (line or "").strip()
-    if not line:
-        return []
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT c.name
-            FROM cells c
-            JOIN lines l ON l.id = c.line_id
-            WHERE l.name=?
-            ORDER BY c.name
-            """,
-            (line,),
-        ).fetchall()
-        return [r["name"] for r in rows]
-
-
-def list_machines_for_cell(line: str, cell: str) -> List[str]:
-    line = (line or "").strip()
-    cell = (cell or "").strip()
-    if not line or not cell:
-        return []
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT m.name
-            FROM machines m
-            JOIN cells c ON c.id = m.cell_id
-            JOIN lines l ON l.id = c.line_id
-            WHERE l.name=? AND c.name=?
-            ORDER BY m.name
-            """,
-            (line, cell),
-        ).fetchall()
-        return [r["name"] for r in rows]
-
-
-def list_cells_with_machines(line: str) -> List[Dict[str, Any]]:
-    line = (line or "").strip()
-    if not line:
-        return []
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT c.name AS cell_name, m.name AS machine_name
-            FROM cells c
-            JOIN lines l ON l.id = c.line_id
-            LEFT JOIN machines m ON m.cell_id = c.id
-            WHERE l.name=?
-            ORDER BY c.name, m.name
-            """,
-            (line,),
-        ).fetchall()
-        out: List[Dict[str, Any]] = []
-        for row in rows:
-            out.append({
-                "cell": row["cell_name"],
-                "machine": row["machine_name"] or "",
-            })
-        return out
-
-
-def upsert_cell(line: str, cell: str) -> None:
-    line = (line or "").strip()
-    cell = (cell or "").strip()
-    if not line or not cell:
-        return
-    with connect() as conn:
-        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
-        line_id = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()["id"]
-        conn.execute(
-            "INSERT OR IGNORE INTO cells(line_id, name) VALUES(?, ?)",
-            (line_id, cell),
-        )
-
-
-def upsert_machine(line: str, cell: str, machine: str) -> None:
-    line = (line or "").strip()
-    cell = (cell or "").strip()
-    machine = (machine or "").strip()
-    if not line or not cell or not machine:
-        return
-    with connect() as conn:
-        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
-        line_id = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()["id"]
-        conn.execute(
-            "INSERT OR IGNORE INTO cells(line_id, name) VALUES(?, ?)",
-            (line_id, cell),
-        )
-        cell_id = conn.execute(
-            "SELECT id FROM cells WHERE line_id=? AND name=?",
-            (line_id, cell),
-        ).fetchone()["id"]
-        conn.execute(
-            "INSERT OR IGNORE INTO machines(cell_id, name) VALUES(?, ?)",
-            (cell_id, machine),
-        )
-
-
-def delete_cell(line: str, cell: str) -> None:
-    line = (line or "").strip()
-    cell = (cell or "").strip()
-    if not line or not cell:
-        return
-    with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT c.id
-            FROM cells c
-            JOIN lines l ON l.id = c.line_id
-            WHERE l.name=? AND c.name=?
-            """,
-            (line, cell),
-        ).fetchone()
-        if row:
-            conn.execute("DELETE FROM cells WHERE id=?", (row["id"],))
-
-
-def delete_machine(line: str, cell: str, machine: str) -> None:
-    line = (line or "").strip()
-    cell = (cell or "").strip()
-    machine = (machine or "").strip()
-    if not line or not cell or not machine:
-        return
-    with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT m.id
-            FROM machines m
-            JOIN cells c ON c.id = m.cell_id
-            JOIN lines l ON l.id = c.line_id
-            WHERE l.name=? AND c.name=? AND m.name=?
-            """,
-            (line, cell, machine),
-        ).fetchone()
-        if row:
-            conn.execute("DELETE FROM machines WHERE id=?", (row["id"],))
-
 def list_production_goals() -> List[Dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
-            "SELECT line, cell, part_number, target FROM production_goals ORDER BY line, cell, part_number"
+            "SELECT line, target FROM production_goals ORDER BY line"
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def get_production_goal(line: str, cell: str, part_number: str) -> float:
-    line = (line or "").strip()
-    cell = (cell or "").strip()
-    part_number = (part_number or "").strip()
-    if not line:
-        return 0.0
+def get_production_goal(line: str) -> float:
     with connect() as conn:
         row = conn.execute(
-            """
-            SELECT target
-            FROM production_goals
-            WHERE line=? AND cell=? AND part_number=?
-            """,
-            (line, cell, part_number),
+            "SELECT target FROM production_goals WHERE line=?",
+            (line,),
         ).fetchone()
         return float(row["target"]) if row else 0.0
 
 
-def upsert_production_goal(line: str, cell: str, part_number: str, target: float) -> None:
+def upsert_production_goal(line: str, target: float) -> None:
     line = (line or "").strip()
-    cell = (cell or "").strip()
-    part_number = (part_number or "").strip()
-    if not line or not cell or not part_number:
+    if not line:
         return
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO production_goals(line, cell, part_number, target)
-            VALUES(?, ?, ?, ?)
-            ON CONFLICT(line, cell, part_number) DO UPDATE SET
+            INSERT INTO production_goals(line, target)
+            VALUES(?, ?)
+            ON CONFLICT(line) DO UPDATE SET
               target=excluded.target,
               updated_at=datetime('now')
             """,
-            (line, cell, part_number, float(target)),
+            (line, float(target)),
         )
 
 
@@ -1138,9 +933,6 @@ def upsert_tool_entry(entry: Dict[str, Any]) -> None:
         "tool_num": entry.get("Tool_Num", ""),
         "reason": entry.get("Reason", ""),
         "downtime_mins": float(entry.get("Downtime_Mins", 0.0) or 0.0),
-        "downtime_code": entry.get("Downtime_Code", ""),
-        "downtime_occurrences": int(entry.get("Downtime_Occurrences", 0) or 0),
-        "downtime_comments": entry.get("Downtime_Comments", ""),
         "production_qty": float(entry.get("Production_Qty", 0.0) or 0.0),
         "cost": float(entry.get("Cost", 0.0) or 0.0),
         "tool_life": float(entry.get("Tool_Life", 0.0) or 0.0),
@@ -1196,45 +988,6 @@ def fetch_tool_entries(month: Optional[str] = None) -> List[Dict[str, Any]]:
             rows = conn.execute(
                 "SELECT * FROM tool_entries ORDER BY date DESC, time DESC"
             ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def replace_shift_downtime_entries(entry_id: str, items: Iterable[Dict[str, Any]]) -> None:
-    entry_id = (entry_id or "").strip()
-    if not entry_id:
-        return
-    with connect() as conn:
-        conn.execute("DELETE FROM shift_downtime_entries WHERE entry_id=?", (entry_id,))
-        for item in items:
-            conn.execute(
-                """
-                INSERT INTO shift_downtime_entries(entry_id, code, downtime_mins, occurrences, comments)
-                VALUES(?, ?, ?, ?, ?)
-                """,
-                (
-                    entry_id,
-                    item.get("code", ""),
-                    float(item.get("downtime_mins", 0.0) or 0.0),
-                    int(item.get("occurrences", 0) or 0),
-                    item.get("comments", ""),
-                ),
-            )
-
-
-def list_shift_downtime_entries(entry_id: str) -> List[Dict[str, Any]]:
-    entry_id = (entry_id or "").strip()
-    if not entry_id:
-        return []
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT code, downtime_mins, occurrences, comments
-            FROM shift_downtime_entries
-            WHERE entry_id=?
-            ORDER BY id
-            """,
-            (entry_id,),
-        ).fetchall()
         return [dict(r) for r in rows]
 
 

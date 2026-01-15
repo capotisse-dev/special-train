@@ -18,7 +18,6 @@ from .db import (
     list_lines,
     get_production_goal,
     fetch_tool_entries,
-    list_shift_downtime_entries,
 )
 from .permissions import ROLE_SCREEN_DEFAULTS
 from .screen_registry import SCREEN_REGISTRY
@@ -522,10 +521,8 @@ class AdminUI(tk.Frame):
             "Date",
             "Time",
             "Line",
-            "Cell",
             "Shift",
             "Operator",
-            "Part_Number",
             "Production_Qty",
             "Downtime_Mins",
             "Target",
@@ -612,9 +609,7 @@ class AdminUI(tk.Frame):
         self.shift_report_cache = {}
         for entry, entry_dt in filtered:
             line = entry.get("line", "")
-            cell = entry.get("cell", "")
-            part_number = entry.get("part_number", "")
-            target = get_production_goal(line, cell, part_number)
+            target = get_production_goal(line)
             production_qty = float(entry.get("production_qty", 0.0) or 0.0)
             downtime = float(entry.get("downtime_mins", 0.0) or 0.0)
 
@@ -628,10 +623,8 @@ class AdminUI(tk.Frame):
                 entry.get("date", ""),
                 entry.get("time", ""),
                 line,
-                cell,
                 entry.get("shift", ""),
                 entry.get("tool_changer", ""),
-                part_number,
                 f"{production_qty:.0f}",
                 f"{downtime:.1f}",
                 f"{target:.0f}",
@@ -644,7 +637,6 @@ class AdminUI(tk.Frame):
                 "target": target,
                 "pct_goal": pct_goal,
                 "pct_goal_adj": pct_goal_adj,
-                "downtime_entries": list_shift_downtime_entries(entry.get("id", "")),
             }
 
     def review_shift_report(self):
@@ -661,17 +653,15 @@ class AdminUI(tk.Frame):
         entry = data["entry"]
         top = tk.Toplevel(self)
         top.title("Shift Report Review")
-        top.geometry("520x520")
+        top.geometry("420x360")
 
         info = [
             ("ID", entry.get("id", "")),
             ("Date", entry.get("date", "")),
             ("Time", entry.get("time", "")),
             ("Line", entry.get("line", "")),
-            ("Cell", entry.get("cell", "")),
             ("Shift", entry.get("shift", "")),
             ("Operator", entry.get("tool_changer", "")),
-            ("Part Number", entry.get("part_number", "")),
             ("Production Qty", f"{float(entry.get('production_qty', 0.0) or 0.0):.0f}"),
             ("Downtime (min)", f"{float(entry.get('downtime_mins', 0.0) or 0.0):.1f}"),
             ("Target", f"{data['target']:.0f}"),
@@ -684,21 +674,3 @@ class AdminUI(tk.Frame):
         for idx, (label, value) in enumerate(info):
             tk.Label(frame, text=f"{label}:", anchor="w", width=18).grid(row=idx, column=0, sticky="w", pady=4)
             tk.Label(frame, text=value, anchor="w").grid(row=idx, column=1, sticky="w", pady=4)
-
-        downtime_entries = data.get("downtime_entries", [])
-        start_row = len(info)
-        tk.Label(frame, text="Downtime Details:", anchor="w", width=18).grid(
-            row=start_row, column=0, sticky="w", pady=(12, 4)
-        )
-        if downtime_entries:
-            detail_lines = []
-            for entry_row in downtime_entries:
-                detail_lines.append(
-                    f"{entry_row.get('code', '')}: {entry_row.get('downtime_mins', 0.0)} min, "
-                    f"{entry_row.get('occurrences', 0)}x, {entry_row.get('comments', '')}"
-                )
-            tk.Label(frame, text="\n".join(detail_lines), anchor="w", justify="left").grid(
-                row=start_row, column=1, sticky="w", pady=(12, 4)
-            )
-        else:
-            tk.Label(frame, text="None", anchor="w").grid(row=start_row, column=1, sticky="w", pady=(12, 4))

@@ -4,7 +4,6 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import shutil
-import pandas as pd
 
 from .storage import safe_float, safe_int
 from .db import (
@@ -27,17 +26,8 @@ from .db import (
     list_downtime_codes,
     upsert_downtime_code,
     deactivate_downtime_code,
-    ensure_lines,
     list_production_goals,
     upsert_production_goal,
-    list_cells_for_line,
-    list_cells_with_machines,
-    list_machines_for_cell,
-    upsert_cell,
-    upsert_machine,
-    delete_cell,
-    delete_machine,
-    list_parts_for_line,
 )
 from .audit import log_audit
 from .config import DB_PATH
@@ -73,10 +63,6 @@ class MasterDataUI(tk.Frame):
         self.db_export_btn.pack(side="right")
         self.db_import_btn = tk.Button(top_controls, text="Import Database", command=self._import_database)
         self.db_import_btn.pack(side="right", padx=8)
-        self.md_export_btn = tk.Button(top_controls, text="Export Master Data", command=self._export_master_data)
-        self.md_export_btn.pack(side="right", padx=8)
-        self.md_import_btn = tk.Button(top_controls, text="Import Master Data", command=self._import_master_data)
-        self.md_import_btn.pack(side="right", padx=8)
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=10, pady=10)
@@ -86,21 +72,18 @@ class MasterDataUI(tk.Frame):
         tab_scrap = tk.Frame(nb, bg=controller.colors["bg"])
         tab_downtime = tk.Frame(nb, bg=controller.colors["bg"])
         tab_goals = tk.Frame(nb, bg=controller.colors["bg"])
-        tab_cells = tk.Frame(nb, bg=controller.colors["bg"])
 
         nb.add(tab_tools, text="Tool Pricing")
         nb.add(tab_parts, text="Parts & Lines")
         nb.add(tab_scrap, text="Scrap Pricing")
         nb.add(tab_downtime, text="Downtime Codes")
         nb.add(tab_goals, text="Production Goals")
-        nb.add(tab_cells, text="Cells & Machines")
 
         self._build_tool_pricing(tab_tools)
         self._build_parts(tab_parts)
         self._build_scrap(tab_scrap)
         self._build_downtime(tab_downtime)
         self._build_production_goals(tab_goals)
-        self._build_cells(tab_cells)
         self._apply_readonly_master_data()
 
     def _apply_readonly_master_data(self):
@@ -108,8 +91,6 @@ class MasterDataUI(tk.Frame):
             return
         self.db_import_btn.configure(state="disabled")
         self.db_export_btn.configure(state="disabled")
-        self.md_import_btn.configure(state="disabled")
-        self.md_export_btn.configure(state="disabled")
 
     # -------------------- TOOL PRICING --------------------
     def _build_tool_pricing(self, parent):
@@ -682,166 +663,6 @@ class MasterDataUI(tk.Frame):
         log_audit(self.controller.user, f"Deactivated downtime code {code}")
         self.refresh_downtime()
 
-    # -------------------- CELLS & MACHINES --------------------
-    def _build_cells(self, parent):
-        top = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=10)
-        top.pack(fill="x")
-
-        tk.Label(
-            top,
-            text="Cells & Machines",
-            bg=self.controller.colors["bg"],
-            fg=self.controller.colors["fg"],
-            font=("Arial", 14, "bold"),
-        ).pack(side="left")
-
-        tk.Button(top, text="Refresh", command=self.refresh_cells).pack(side="right")
-
-        filter_frame = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=6)
-        filter_frame.pack(fill="x")
-
-        tk.Label(filter_frame, text="Line:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
-        self.cell_line_var = tk.StringVar(value="")
-        self.cell_line_combo = ttk.Combobox(
-            filter_frame,
-            values=list_lines(),
-            textvariable=self.cell_line_var,
-            state="readonly",
-            width=18,
-        )
-        self.cell_line_combo.pack(side="left", padx=6)
-        self.cell_line_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_cells())
-
-        self.cell_del_btn = tk.Button(filter_frame, text="Delete Selected", command=self.delete_selected_cell_machine)
-        self.cell_del_btn.pack(side="right")
-
-        form = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=6)
-        form.pack(fill="x")
-
-        tk.Label(form, text="New Cell:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).grid(row=0, column=0, sticky="w")
-        self.new_cell_var = tk.StringVar(value="")
-        tk.Entry(form, textvariable=self.new_cell_var, width=20).grid(row=0, column=1, sticky="w", padx=6)
-        self.add_cell_btn = tk.Button(form, text="Add Cell", command=self.add_cell, bg="#28a745", fg="white")
-        self.add_cell_btn.grid(row=0, column=2, sticky="w", padx=6)
-
-        tk.Label(form, text="Cell:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).grid(
-            row=1, column=0, sticky="w", pady=(8, 0)
-        )
-        self.machine_cell_var = tk.StringVar(value="")
-        self.machine_cell_combo = ttk.Combobox(
-            form,
-            values=[],
-            textvariable=self.machine_cell_var,
-            state="readonly",
-            width=18,
-        )
-        self.machine_cell_combo.grid(row=1, column=1, sticky="w", padx=6, pady=(8, 0))
-
-        tk.Label(form, text="Machine:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).grid(
-            row=1, column=2, sticky="w", padx=(12, 0), pady=(8, 0)
-        )
-        self.new_machine_var = tk.StringVar(value="")
-        tk.Entry(form, textvariable=self.new_machine_var, width=20).grid(row=1, column=3, sticky="w", padx=6, pady=(8, 0))
-        self.add_machine_btn = tk.Button(form, text="Add Machine", command=self.add_machine, bg="#28a745", fg="white")
-        self.add_machine_btn.grid(row=1, column=4, sticky="w", padx=6, pady=(8, 0))
-
-        cols = ("cell", "machine")
-        self.cell_tree = ttk.Treeview(parent, columns=cols, show="headings", height=12)
-        for c in cols:
-            self.cell_tree.heading(c, text=c.upper())
-            self.cell_tree.column(c, width=220)
-        self.cell_tree.pack(fill="both", expand=True, padx=10, pady=10)
-
-        if self.readonly:
-            self.add_cell_btn.configure(state="disabled")
-            self.add_machine_btn.configure(state="disabled")
-            self.cell_del_btn.configure(state="disabled")
-
-        self.refresh_cells()
-
-    def refresh_cells(self):
-        if hasattr(self, "cell_tree"):
-            for i in self.cell_tree.get_children():
-                self.cell_tree.delete(i)
-            line = self.cell_line_combo.get().strip() if hasattr(self, "cell_line_combo") else ""
-            if not line:
-                line_opts = list_lines()
-                if line_opts:
-                    line = line_opts[0]
-                    self.cell_line_combo.set(line)
-            rows = list_cells_with_machines(line) if line else []
-            if rows:
-                for row in rows:
-                    self.cell_tree.insert("", "end", values=(row.get("cell", ""), row.get("machine", "")))
-            else:
-                for cell in list_cells_for_line(line):
-                    self.cell_tree.insert("", "end", values=(cell, ""))
-
-            cells = list_cells_for_line(line)
-            self.machine_cell_combo.configure(values=cells)
-            if cells:
-                self.machine_cell_combo.set(cells[0])
-            else:
-                self.machine_cell_combo.set("")
-
-            self.cell_line_combo.configure(values=list_lines())
-
-    def add_cell(self):
-        if self.readonly:
-            return
-        line = self.cell_line_combo.get().strip()
-        cell = self.new_cell_var.get().strip()
-        if not line:
-            messagebox.showerror("Missing Info", "Select a line.")
-            return
-        if not cell:
-            messagebox.showerror("Missing Info", "Enter a cell name.")
-            return
-        upsert_cell(line, cell)
-        log_audit(self.controller.user, f"Added cell {cell} to {line}")
-        self.new_cell_var.set("")
-        self.refresh_cells()
-
-    def add_machine(self):
-        if self.readonly:
-            return
-        line = self.cell_line_combo.get().strip()
-        cell = self.machine_cell_combo.get().strip()
-        machine = self.new_machine_var.get().strip()
-        if not line:
-            messagebox.showerror("Missing Info", "Select a line.")
-            return
-        if not cell:
-            messagebox.showerror("Missing Info", "Select a cell.")
-            return
-        if not machine:
-            messagebox.showerror("Missing Info", "Enter a machine name.")
-            return
-        upsert_machine(line, cell, machine)
-        log_audit(self.controller.user, f"Added machine {machine} to {cell} ({line})")
-        self.new_machine_var.set("")
-        self.refresh_cells()
-
-    def delete_selected_cell_machine(self):
-        if self.readonly:
-            return
-        sel = self.cell_tree.selection()
-        if not sel:
-            return
-        line = self.cell_line_combo.get().strip()
-        cell, machine = self.cell_tree.item(sel[0], "values")
-        if machine:
-            if not messagebox.askyesno("Confirm", f"Delete machine '{machine}' from cell '{cell}'?"):
-                return
-            delete_machine(line, cell, machine)
-            log_audit(self.controller.user, f"Deleted machine {machine} from {cell} ({line})")
-        else:
-            if not messagebox.askyesno("Confirm", f"Delete cell '{cell}' and all machines?"):
-                return
-            delete_cell(line, cell)
-            log_audit(self.controller.user, f"Deleted cell {cell} from {line}")
-        self.refresh_cells()
-
     # -------------------- DATABASE IMPORT/EXPORT --------------------
     def _export_database(self):
         if self.readonly:
@@ -881,259 +702,6 @@ class MasterDataUI(tk.Frame):
         except Exception as exc:
             messagebox.showerror("Import Failed", f"Unable to import database.\n{exc}")
 
-    # -------------------- MASTER DATA IMPORT/EXPORT --------------------
-    def _collect_master_data(self):
-        lines = list_lines()
-        parts = list_parts_with_lines()
-        tools = list_tools_simple()
-        downtime = list_downtime_codes(active_only=False)
-        goals = list_production_goals()
-
-        df_lines = pd.DataFrame([{"line": ln} for ln in lines], columns=["line"])
-        df_parts = pd.DataFrame(
-            [
-                {
-                    "part_number": p.get("part_number", ""),
-                    "name": p.get("name", ""),
-                    "lines": ", ".join(p.get("lines", []) or []),
-                    "is_active": 1,
-                }
-                for p in parts
-            ],
-            columns=["part_number", "name", "lines", "is_active"],
-        )
-        df_tools = pd.DataFrame(
-            [
-                {
-                    "tool_num": t.get("tool_num", ""),
-                    "name": t.get("name", ""),
-                    "unit_cost": t.get("unit_cost", 0.0),
-                    "stock_qty": t.get("stock_qty", 0),
-                    "inserts_per_tool": t.get("inserts_per_tool", 1),
-                    "lines": ", ".join(get_tool_lines(t.get("tool_num", ""))),
-                    "parts": ", ".join(get_tool_parts(t.get("tool_num", ""))),
-                    "is_active": 1,
-                }
-                for t in tools
-            ],
-            columns=[
-                "tool_num",
-                "name",
-                "unit_cost",
-                "stock_qty",
-                "inserts_per_tool",
-                "lines",
-                "parts",
-                "is_active",
-            ],
-        )
-        df_downtime = pd.DataFrame(
-            [
-                {
-                    "code": d.get("code", ""),
-                    "description": d.get("description", ""),
-                    "is_active": int(d.get("is_active", 1) or 0),
-                }
-                for d in downtime
-            ],
-            columns=["code", "description", "is_active"],
-        )
-        df_goals = pd.DataFrame(
-            [
-                {
-                    "line": g.get("line", ""),
-                    "cell": g.get("cell", ""),
-                    "part_number": g.get("part_number", ""),
-                    "target": g.get("target", 0.0),
-                }
-                for g in goals
-            ],
-            columns=["line", "cell", "part_number", "target"],
-        )
-
-        cells_rows = []
-        machines_rows = []
-        for line in lines:
-            for cell in list_cells_for_line(line):
-                cells_rows.append({"line": line, "cell": cell})
-                for machine in list_machines_for_cell(line, cell):
-                    machines_rows.append({"line": line, "cell": cell, "machine": machine})
-
-        df_cells = pd.DataFrame(cells_rows, columns=["line", "cell"])
-        df_machines = pd.DataFrame(machines_rows, columns=["line", "cell", "machine"])
-        return {
-            "lines": df_lines,
-            "parts": df_parts,
-            "tools": df_tools,
-            "downtime_codes": df_downtime,
-            "production_goals": df_goals,
-            "cells": df_cells,
-            "machines": df_machines,
-        }
-
-    def _export_master_data(self):
-        if self.readonly:
-            return
-        path = filedialog.asksaveasfilename(
-            title="Export Master Data",
-            defaultextension=".xlsx",
-            filetypes=[("Excel Workbook", "*.xlsx"), ("CSV (combined)", "*.csv")],
-        )
-        if not path:
-            return
-        data = self._collect_master_data()
-        try:
-            if path.lower().endswith(".csv"):
-                frames = []
-                columns = ["table"]
-                for name, df in data.items():
-                    df = df.copy()
-                    df.insert(0, "table", name)
-                    for col in df.columns:
-                        if col not in columns:
-                            columns.append(col)
-                    frames.append(df)
-                out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
-                out = out.reindex(columns=columns)
-                out.to_csv(path, index=False)
-            else:
-                with pd.ExcelWriter(path, engine="openpyxl") as writer:
-                    for name, df in data.items():
-                        df.to_excel(writer, sheet_name=name, index=False)
-            log_audit(self.controller.user, f"Exported master data to {path}")
-            messagebox.showinfo("Exported", f"Master data exported to:\n{path}")
-        except Exception as exc:
-            messagebox.showerror("Export Failed", f"Unable to export master data.\n{exc}")
-
-    def _import_master_data(self):
-        if self.readonly:
-            return
-        path = filedialog.askopenfilename(
-            title="Import Master Data",
-            filetypes=[("Excel Workbook", "*.xlsx"), ("CSV (combined)", "*.csv")],
-        )
-        if not path:
-            return
-        if not messagebox.askyesno(
-            "Confirm Import",
-            "Importing master data will overwrite or add data. Continue?",
-        ):
-            return
-
-        try:
-            if path.lower().endswith(".csv"):
-                df_all = pd.read_csv(path)
-                if "table" not in df_all.columns:
-                    raise ValueError("CSV must include a 'table' column.")
-                sheets = {name: sub.drop(columns=["table"]) for name, sub in df_all.groupby("table")}
-            else:
-                sheets = pd.read_excel(path, sheet_name=None)
-
-            self._apply_master_data_import(sheets)
-            log_audit(self.controller.user, f"Imported master data from {path}")
-            messagebox.showinfo("Imported", "Master data imported.")
-            self.refresh_tools()
-            self.refresh_parts()
-            self.refresh_scrap()
-            self.refresh_downtime()
-            self.refresh_goals()
-            self.refresh_cells()
-        except Exception as exc:
-            messagebox.showerror("Import Failed", f"Unable to import master data.\n{exc}")
-
-    def _apply_master_data_import(self, sheets):
-        def _sheet(name: str) -> pd.DataFrame:
-            for key, df in sheets.items():
-                if key.lower() == name:
-                    return df
-            return pd.DataFrame()
-
-        def _clean(df: pd.DataFrame) -> pd.DataFrame:
-            return df.fillna("")
-
-        lines_df = _clean(_sheet("lines"))
-        if not lines_df.empty and "line" in lines_df.columns:
-            ensure_lines(lines_df["line"].astype(str).tolist())
-
-        parts_df = _clean(_sheet("parts"))
-        if not parts_df.empty and "part_number" in parts_df.columns:
-            for _, row in parts_df.iterrows():
-                part_number = str(row.get("part_number", "")).strip()
-                if not part_number:
-                    continue
-                is_active = safe_int(row.get("is_active", 1), 1)
-                if is_active:
-                    lines = [ln.strip() for ln in str(row.get("lines", "")).split(",") if ln.strip()]
-                    upsert_part(part_number, str(row.get("name", "")).strip(), lines)
-                else:
-                    deactivate_part(part_number)
-
-        tools_df = _clean(_sheet("tools"))
-        if not tools_df.empty and "tool_num" in tools_df.columns:
-            tool_lines = {}
-            tool_parts = {}
-            for _, row in tools_df.iterrows():
-                tool_num = str(row.get("tool_num", "")).strip()
-                if not tool_num:
-                    continue
-                is_active = safe_int(row.get("is_active", 1), 1)
-                if is_active:
-                    upsert_tool_inventory(
-                        tool_num,
-                        name=str(row.get("name", "")).strip(),
-                        unit_cost=safe_float(row.get("unit_cost", 0.0), 0.0),
-                        stock_qty=safe_int(row.get("stock_qty", 0), 0),
-                        inserts_per_tool=safe_int(row.get("inserts_per_tool", 1), 1),
-                    )
-                    tool_lines[tool_num] = [ln.strip() for ln in str(row.get("lines", "")).split(",") if ln.strip()]
-                    tool_parts[tool_num] = [pn.strip() for pn in str(row.get("parts", "")).split(",") if pn.strip()]
-                else:
-                    deactivate_tool(tool_num)
-            for tool_num, lines in tool_lines.items():
-                set_tool_lines(tool_num, lines)
-            for tool_num, parts in tool_parts.items():
-                set_tool_parts(tool_num, parts)
-
-        downtime_df = _clean(_sheet("downtime_codes"))
-        if not downtime_df.empty and "code" in downtime_df.columns:
-            for _, row in downtime_df.iterrows():
-                code = str(row.get("code", "")).strip()
-                if not code:
-                    continue
-                is_active = safe_int(row.get("is_active", 1), 1)
-                if is_active:
-                    upsert_downtime_code(code, str(row.get("description", "")).strip())
-                else:
-                    deactivate_downtime_code(code)
-
-        goals_df = _clean(_sheet("production_goals"))
-        if not goals_df.empty and "line" in goals_df.columns:
-            for _, row in goals_df.iterrows():
-                line = str(row.get("line", "")).strip()
-                cell = str(row.get("cell", "")).strip()
-                part_number = str(row.get("part_number", "")).strip()
-                if not line or not cell or not part_number:
-                    continue
-                target = safe_float(row.get("target", 0.0), 0.0)
-                upsert_production_goal(line, cell, part_number, target)
-
-        cells_df = _clean(_sheet("cells"))
-        if not cells_df.empty and "line" in cells_df.columns:
-            for _, row in cells_df.iterrows():
-                line = str(row.get("line", "")).strip()
-                cell = str(row.get("cell", "")).strip()
-                if line and cell:
-                    upsert_cell(line, cell)
-
-        machines_df = _clean(_sheet("machines"))
-        if not machines_df.empty and "line" in machines_df.columns:
-            for _, row in machines_df.iterrows():
-                line = str(row.get("line", "")).strip()
-                cell = str(row.get("cell", "")).strip()
-                machine = str(row.get("machine", "")).strip()
-                if line and cell and machine:
-                    upsert_machine(line, cell, machine)
-
     # -------------------- PRODUCTION GOALS --------------------
     def _build_production_goals(self, parent):
         top = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=10)
@@ -1159,51 +727,22 @@ class MasterDataUI(tk.Frame):
             values=list_lines(),
             textvariable=self.goal_line_var,
             state="readonly",
-            width=12,
+            width=18,
         )
         self.goal_line_combo.pack(side="left", padx=6)
-        self.goal_line_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_goal_cells())
-
-        tk.Label(form, text="Cell:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
-        self.goal_cell_var = tk.StringVar(value="")
-        self.goal_cell_combo = ttk.Combobox(
-            form,
-            values=[],
-            textvariable=self.goal_cell_var,
-            state="readonly",
-            width=12,
-        )
-        self.goal_cell_combo.pack(side="left", padx=6)
-        self.goal_cell_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_goal_parts())
-
-        tk.Label(form, text="Part:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
-        self.goal_part_var = tk.StringVar(value="")
-        self.goal_part_combo = ttk.Combobox(
-            form,
-            values=[],
-            textvariable=self.goal_part_var,
-            state="readonly",
-            width=16,
-        )
-        self.goal_part_combo.pack(side="left", padx=6)
 
         tk.Label(form, text="Target:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
         self.goal_target_var = tk.StringVar(value="")
-        tk.Entry(form, textvariable=self.goal_target_var, width=10).pack(side="left", padx=6)
+        tk.Entry(form, textvariable=self.goal_target_var, width=12).pack(side="left", padx=6)
 
         self.goal_save_btn = tk.Button(form, text="Save Goal", command=self.save_goal, bg="#28a745", fg="white")
         self.goal_save_btn.pack(side="left", padx=8)
 
-        cols = ("line", "cell", "part_number", "target")
+        cols = ("line", "target")
         self.goal_tree = ttk.Treeview(parent, columns=cols, show="headings", height=12)
         for c in cols:
             self.goal_tree.heading(c, text=c.upper())
-            if c in {"line", "cell"}:
-                self.goal_tree.column(c, width=140)
-            elif c == "part_number":
-                self.goal_tree.column(c, width=180)
-            else:
-                self.goal_tree.column(c, width=120)
+            self.goal_tree.column(c, width=180 if c == "line" else 140)
         self.goal_tree.pack(fill="both", expand=True, padx=10, pady=10)
         self.goal_tree.bind("<<TreeviewSelect>>", self._load_selected_goal)
 
@@ -1216,67 +755,26 @@ class MasterDataUI(tk.Frame):
             for i in self.goal_tree.get_children():
                 self.goal_tree.delete(i)
             for goal in list_production_goals():
-                self.goal_tree.insert("", "end", values=(
-                    goal.get("line", ""),
-                    goal.get("cell", ""),
-                    goal.get("part_number", ""),
-                    goal.get("target", 0.0),
-                ))
+                self.goal_tree.insert("", "end", values=(goal.get("line", ""), goal.get("target", 0.0)))
         if hasattr(self, "goal_line_combo"):
             self.goal_line_combo.configure(values=list_lines())
-        self._refresh_goal_cells()
-
-    def _refresh_goal_cells(self):
-        if not hasattr(self, "goal_cell_combo") or not hasattr(self, "goal_line_combo"):
-            return
-        line = self.goal_line_combo.get().strip()
-        cells = list_cells_for_line(line)
-        self.goal_cell_combo.configure(values=cells)
-        if cells and self.goal_cell_var.get() not in cells:
-            self.goal_cell_var.set(cells[0])
-        elif not cells:
-            self.goal_cell_var.set("")
-        self._refresh_goal_parts()
-
-    def _refresh_goal_parts(self):
-        if not hasattr(self, "goal_part_combo") or not hasattr(self, "goal_line_combo"):
-            return
-        line = self.goal_line_combo.get().strip()
-        parts = list_parts_for_line(line)
-        self.goal_part_combo.configure(values=parts)
-        if parts and self.goal_part_var.get() not in parts:
-            self.goal_part_var.set(parts[0])
-        elif not parts:
-            self.goal_part_var.set("")
 
     def _load_selected_goal(self, event=None):
         sel = self.goal_tree.selection()
         if not sel:
             return
-        line, cell, part_number, target = self.goal_tree.item(sel[0], "values")
+        line, target = self.goal_tree.item(sel[0], "values")
         self.goal_line_var.set(line)
-        self._refresh_goal_cells()
-        self.goal_cell_var.set(cell)
-        self._refresh_goal_parts()
-        self.goal_part_var.set(part_number)
         self.goal_target_var.set(str(target))
 
     def save_goal(self):
         if self.readonly:
             return
         line = self.goal_line_var.get().strip()
-        cell = self.goal_cell_var.get().strip()
-        part_number = self.goal_part_var.get().strip()
         if not line:
             messagebox.showerror("Error", "Select a line.")
             return
-        if not cell:
-            messagebox.showerror("Error", "Select a cell.")
-            return
-        if not part_number:
-            messagebox.showerror("Error", "Select a part number.")
-            return
         target = safe_float(self.goal_target_var.get(), 0.0)
-        upsert_production_goal(line, cell, part_number, target)
-        log_audit(self.controller.user, f"Updated production goal for {line}/{cell}/{part_number}: {target}")
+        upsert_production_goal(line, target)
+        log_audit(self.controller.user, f"Updated production goal for {line}: {target}")
         self.refresh_goals()
