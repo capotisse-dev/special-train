@@ -66,6 +66,22 @@ def init_db() -> None:
         FOREIGN KEY(line_id) REFERENCES lines(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS cells (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        line_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        UNIQUE(line_id, name),
+        FOREIGN KEY(line_id) REFERENCES lines(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS machines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cell_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        UNIQUE(cell_id, name),
+        FOREIGN KEY(cell_id) REFERENCES cells(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS tools (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tool_num TEXT NOT NULL UNIQUE,
@@ -134,6 +150,7 @@ def init_db() -> None:
         time TEXT NOT NULL,
         shift TEXT NOT NULL DEFAULT '',
         line TEXT NOT NULL DEFAULT '',
+        cell TEXT NOT NULL DEFAULT '',
         machine TEXT NOT NULL DEFAULT '',
         part_number TEXT NOT NULL DEFAULT '',
         tool_num TEXT NOT NULL DEFAULT '',
@@ -894,6 +911,7 @@ def upsert_tool_entry(entry: Dict[str, Any]) -> None:
         "time": entry.get("Time", ""),
         "shift": entry.get("Shift", ""),
         "line": entry.get("Line", ""),
+        "cell": entry.get("Cell", ""),
         "machine": entry.get("Machine", ""),
         "part_number": entry.get("Part_Number", ""),
         "tool_num": entry.get("Tool_Num", ""),
