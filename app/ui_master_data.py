@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
+import shutil
 
 from .storage import safe_float, safe_int
 from .db import (
@@ -25,8 +26,11 @@ from .db import (
     list_downtime_codes,
     upsert_downtime_code,
     deactivate_downtime_code,
+    list_production_goals,
+    upsert_production_goal,
 )
 from .audit import log_audit
+from .config import DB_PATH
 
 
 
@@ -44,6 +48,22 @@ class MasterDataUI(tk.Frame):
         self.controller = controller
         self.readonly = not controller.can_edit_screen("Master Data")
 
+        top_controls = tk.Frame(self, bg=controller.colors["bg"], padx=10, pady=10)
+        top_controls.pack(fill="x")
+
+        tk.Label(
+            top_controls,
+            text="Master Data",
+            bg=controller.colors["bg"],
+            fg=controller.colors["fg"],
+            font=("Arial", 14, "bold"),
+        ).pack(side="left")
+
+        self.db_export_btn = tk.Button(top_controls, text="Export Database", command=self._export_database)
+        self.db_export_btn.pack(side="right")
+        self.db_import_btn = tk.Button(top_controls, text="Import Database", command=self._import_database)
+        self.db_import_btn.pack(side="right", padx=8)
+
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -51,16 +71,26 @@ class MasterDataUI(tk.Frame):
         tab_parts = tk.Frame(nb, bg=controller.colors["bg"])
         tab_scrap = tk.Frame(nb, bg=controller.colors["bg"])
         tab_downtime = tk.Frame(nb, bg=controller.colors["bg"])
+        tab_goals = tk.Frame(nb, bg=controller.colors["bg"])
 
         nb.add(tab_tools, text="Tool Pricing")
         nb.add(tab_parts, text="Parts & Lines")
         nb.add(tab_scrap, text="Scrap Pricing")
         nb.add(tab_downtime, text="Downtime Codes")
+        nb.add(tab_goals, text="Production Goals")
 
         self._build_tool_pricing(tab_tools)
         self._build_parts(tab_parts)
         self._build_scrap(tab_scrap)
         self._build_downtime(tab_downtime)
+        self._build_production_goals(tab_goals)
+        self._apply_readonly_master_data()
+
+    def _apply_readonly_master_data(self):
+        if not self.readonly:
+            return
+        self.db_import_btn.configure(state="disabled")
+        self.db_export_btn.configure(state="disabled")
 
     # -------------------- TOOL PRICING --------------------
     def _build_tool_pricing(self, parent):
@@ -632,3 +662,119 @@ class MasterDataUI(tk.Frame):
         deactivate_downtime_code(code)
         log_audit(self.controller.user, f"Deactivated downtime code {code}")
         self.refresh_downtime()
+
+    # -------------------- DATABASE IMPORT/EXPORT --------------------
+    def _export_database(self):
+        if self.readonly:
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export Database",
+            defaultextension=".db",
+            filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            shutil.copyfile(DB_PATH, path)
+            log_audit(self.controller.user, f"Exported database to {path}")
+            messagebox.showinfo("Exported", f"Database exported to:\n{path}")
+        except Exception as exc:
+            messagebox.showerror("Export Failed", f"Unable to export database.\n{exc}")
+
+    def _import_database(self):
+        if self.readonly:
+            return
+        path = filedialog.askopenfilename(
+            title="Import Database",
+            filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+        if not messagebox.askyesno(
+            "Confirm Import",
+            "Importing a database will overwrite current data. Continue?",
+        ):
+            return
+        try:
+            shutil.copyfile(path, DB_PATH)
+            log_audit(self.controller.user, f"Imported database from {path}")
+            messagebox.showinfo("Imported", "Database imported. Please restart the app.")
+        except Exception as exc:
+            messagebox.showerror("Import Failed", f"Unable to import database.\n{exc}")
+
+    # -------------------- PRODUCTION GOALS --------------------
+    def _build_production_goals(self, parent):
+        top = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=10)
+        top.pack(fill="x")
+
+        tk.Label(
+            top,
+            text="Production Goals (Target per Line)",
+            bg=self.controller.colors["bg"],
+            fg=self.controller.colors["fg"],
+            font=("Arial", 14, "bold"),
+        ).pack(side="left")
+
+        tk.Button(top, text="Refresh", command=self.refresh_goals).pack(side="right")
+
+        form = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=6)
+        form.pack(fill="x")
+
+        tk.Label(form, text="Line:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        self.goal_line_var = tk.StringVar(value="")
+        self.goal_line_combo = ttk.Combobox(
+            form,
+            values=list_lines(),
+            textvariable=self.goal_line_var,
+            state="readonly",
+            width=18,
+        )
+        self.goal_line_combo.pack(side="left", padx=6)
+
+        tk.Label(form, text="Target:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        self.goal_target_var = tk.StringVar(value="")
+        tk.Entry(form, textvariable=self.goal_target_var, width=12).pack(side="left", padx=6)
+
+        self.goal_save_btn = tk.Button(form, text="Save Goal", command=self.save_goal, bg="#28a745", fg="white")
+        self.goal_save_btn.pack(side="left", padx=8)
+
+        cols = ("line", "target")
+        self.goal_tree = ttk.Treeview(parent, columns=cols, show="headings", height=12)
+        for c in cols:
+            self.goal_tree.heading(c, text=c.upper())
+            self.goal_tree.column(c, width=180 if c == "line" else 140)
+        self.goal_tree.pack(fill="both", expand=True, padx=10, pady=10)
+        self.goal_tree.bind("<<TreeviewSelect>>", self._load_selected_goal)
+
+        self.refresh_goals()
+        if self.readonly:
+            self.goal_save_btn.configure(state="disabled")
+
+    def refresh_goals(self):
+        if hasattr(self, "goal_tree"):
+            for i in self.goal_tree.get_children():
+                self.goal_tree.delete(i)
+            for goal in list_production_goals():
+                self.goal_tree.insert("", "end", values=(goal.get("line", ""), goal.get("target", 0.0)))
+        if hasattr(self, "goal_line_combo"):
+            self.goal_line_combo.configure(values=list_lines())
+
+    def _load_selected_goal(self, event=None):
+        sel = self.goal_tree.selection()
+        if not sel:
+            return
+        line, target = self.goal_tree.item(sel[0], "values")
+        self.goal_line_var.set(line)
+        self.goal_target_var.set(str(target))
+
+    def save_goal(self):
+        if self.readonly:
+            return
+        line = self.goal_line_var.get().strip()
+        if not line:
+            messagebox.showerror("Error", "Select a line.")
+            return
+        target = safe_float(self.goal_target_var.get(), 0.0)
+        upsert_production_goal(line, target)
+        log_audit(self.controller.user, f"Updated production goal for {line}: {target}")
+        self.refresh_goals()
